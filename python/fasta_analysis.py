@@ -1,5 +1,4 @@
 def read_fasta(filename):
-  
   d = {}
   for line in open(filename):
     line = line.rstrip()
@@ -75,14 +74,20 @@ def chop_seq(seq, orf = 1):
     sys.stderr.write('orf parameter must be one of (1,2,3), not ' + str(orf) + '!!')
     return()
   
-  return [seq[i:i+3] for i in range(0, len(seq[orf-1:])-2, 3)]
+  seq_list = [seq[i:i+3] for i in range(orf-1, len(seq)-1, 3)]
+  
+  if len(seq_list[-1]) < 3:
+    seq_list = seq_list[:-1]
+    
+  return seq_list
   
 
 # test: 
 #
 # 'ATGCGGTAGGACATGGCGCAGTAAATGCGCTACTGA'
 
-def find_orfs(seq_list, 
+
+def find_orfs(seq_list,
               start_codon = 'ATG',
               stop_codons = ('TAA', 'TAG', 'TGA')):
   
@@ -94,72 +99,122 @@ def find_orfs(seq_list,
   start_idx = 0
   stop_idx = 0
   
-  while start_idx < len(starts):
-    while stop_idx < len(stops):
-      if stops[stop_idx] > starts[start_idx]:
-        orfs.append({'start': start_idx, 'len': stops[stop_idx]-starts[start_idx]})
-        bigger_starts = [i for i,x in enumerate(starts) if x > stops[stop_idx]]
-        if len(bigger_starts) < 1:
-          start_idx = len(starts)
-          break
-        start_idx = bigger_starts[0]
-        stop_idx = stop_idx + 1
-        break
-      else: 
-        stop_idx = stop_idx + 1
-    start_idx = start_idx + 1
+  if len(starts) == 0 or len(stops) == 0:
+    return []
   
+  while stop_idx < len(stops):
+    if stops[stop_idx] > starts[start_idx]:
+      # print(starts[start_idx], stops[stop_idx])
+      orfs.append({'start': start_idx*3+1, 'len': (stops[stop_idx]-starts[start_idx]+1)*3})
+      bigger_starts = [i for i,x in enumerate(starts) if x > stops[stop_idx]]
+      if len(bigger_starts) < 1:
+        break
+      else:
+        start_idx = bigger_starts[0]
+    else:
+      stop_idx += 1
   
   return orfs
-      
 
+
+# TODO: explore mulit-thread processing 
 # from concurrent.futures import ThreadPoolExecutor 
 # from multiprocessing.dummy import Pool as ThreadPool
 
 
 def build_orf_table(d, orf = 1):
-
+  
   orfs = {}
-
+  
   for k,v in d.items():
-    print(k)
-    orfs[k] = find_orfs(chop_seq(v, orf = orf))
-    
+    seq_list = chop_seq(v, orf = orf)
+    orfs[k] = find_orfs(seq_list)
+  
   return(orfs)
 
+def test_fun(x): 
+  
+  print(x)
 
-# def describe_orfs(orf = 1, filename):
-# 
-#   if orf not in (1,2,3):
-#     sys.stderr.write('orf parameter must be one of (1,2,3), not ' + str(orf) + '!!')
-#     return()
-#     
-#   # Now that we have a valid orf we need to gather all orfs from the file
-  # while maintaining which sequences they come from 
   
-  # In order to do this we will make a dictionary in which the keys are the fasta identifiers, 
-  # and the entries are lists of orfs. The orf entries will be dictionaries themselves containing
-  # a 'len' and 'start' key
-  #
-  #     { seq1: [{start:, len:}, ..., {start:, len:}]
-  #
-  #                  ...
-  #
-  #       seqn: [{start:, len:}, ..., {start:, len:}]
-  #     }
+def describe_orfs(filename = 'data/dna.example.fasta', 
+                  orf = 1):
+  
+  d = read_fasta(filename)
+  t = build_orf_table(d, orf = orf)
+  
+  # what is the length of the longest ORF in the file? 
+  max_len = 0
+  for k,v in t.items():
+    if len(v) >= 1:
+      lens = [x['len'] for x in v]
+      cur_max = max(lens)
+      if cur_max > max_len:
+        max_len = cur_max
+  
+  # What is the identifier of the sequence containing the longest ORF? 
+  for k,v in t.items():
+    if max_len in [x['len'] for x in v]:
+      print('Sequence', k, 'has longest orf at length:', max_len)
   
   
-  # fasta = read_fasta(filename)
+  # For a given sequence identifier, what is the longest ORF contained 
+  # in the sequence represented by that identifier? 
+  seq_id = 'gi|142022655|gb|EQ086233.1|16'
   
-  # orfs = {}
+  for k,v in t.items():
+    if seq_id in k:
+      lens = [x['len'] for x in v]
+      print('longest sequence in gene id:', seq_id, 'is:', max(lens))
   
-  # for k in fasta:
-    
-# 
-# 
-# def describe_fasta_file(filename): 
-#   
-#   fasta = read_fasta(filename)
-#   
-#   print('Number of fasta records identified in the', 
-#   'provided file %s: %s' % (filename, len(fasta)))
+  
+  # What is the starting position of the longest ORF in the sequence that contains it? 
+  # The position should indicate the character number in the sequence. For instance, \
+  # the following ORF in reading frame 1: -- slightly modified
+  
+  for k,v in t.items():
+    orfs = v
+    for orf in orfs:
+      if orf['len'] == max_len:
+        print(k)
+        print('The starting possition of the longest orf in ', 
+              'the file is:', orf['start'])
+
+
+
+
+#==========================================================================================
+# Repeats
+
+import re
+
+def describe_repeats(filename = 'data/dna.example.fasta', n = 3):
+   
+  d = read_fasta(filename)
+  
+  seq = ''.join(d.values())
+  
+  unique_seqs = set([seq[i:i+n] for i in range(len(seq)-n+1)])
+  
+  seq_counts = {}
+  
+  
+  for unique_seq in unique_seqs:
+    matches = re.finditer(r'(?=(' + unique_seq + '))', seq)
+    matches = [match.group(1) for match in matches]
+    nmatches = len(matches)
+    if nmatches > 1:
+      if nmatches in seq_counts.keys(): 
+        seq_counts[nmatches] = seq_counts[nmatches] + unique_seq
+      else: 
+        seq_counts[nmatches] = unique_seq
+  
+  max_count = max([x for x in seq_counts.keys()])
+  print('Most repeating sequence found in', filename, 'is', 
+       seq_counts[max_count], 'with', max_count, 'repeats')
+       
+  print(len(seq_counts[max_count]))
+
+
+
+
